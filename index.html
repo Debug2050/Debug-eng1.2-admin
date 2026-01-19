@@ -8,7 +8,9 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.0/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <style>
@@ -35,6 +37,7 @@
             font-weight: 600;
             color: #2E7D32;
             background-color: #E8F5E8;
+            white-space: nowrap;
         }
         
         .status-badge {
@@ -84,8 +87,12 @@
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Service Reports Database</h2>
                 <div class="d-flex gap-2">
-                    <input type="text" id="searchInput" class="form-control" placeholder="Search Job # or Customer...">
-                    <button class="btn btn-success" onclick="fetchReports()"><i class="bi bi-arrow-clockwise"></i></button>
+                    <button class="btn btn-primary" onclick="exportToExcel()">
+                        <i class="bi bi-file-earmark-spreadsheet"></i> Export to Excel
+                    </button>
+                    <button class="btn btn-success" onclick="fetchReports()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
                 </div>
             </div>
 
@@ -100,6 +107,12 @@
                     <div class="card p-3">
                         <h6 class="text-muted">Last 7 Days</h6>
                         <h3 id="recentCount">0</h3>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                     <div class="card p-3">
+                        <h6 class="text-muted">Search</h6>
+                        <input type="text" id="searchInput" class="form-control" placeholder="Search Job #, Customer, or Technician...">
                     </div>
                 </div>
             </div>
@@ -164,6 +177,7 @@
         document.getElementById('loader').style.display = 'flex';
         
         try {
+            // Select ALL columns
             const { data, error } = await supabaseClient
                 .from('service_reports')
                 .select('*')
@@ -176,14 +190,47 @@
             updateStats(allReports);
         } catch (err) {
             console.error('Error:', err);
-            alert('Error loading reports. Check console/keys.');
+            alert('Error loading reports. Please check your internet connection or API Keys.');
         } finally {
             document.getElementById('loader').style.display = 'none';
         }
     }
 
     // ==========================================
-    // 3. RENDER UI
+    // 3. EXPORT TO EXCEL (NEW)
+    // ==========================================
+    function exportToExcel() {
+        if (allReports.length === 0) {
+            alert("No data to export!");
+            return;
+        }
+
+        // 1. Prepare data for Excel (removing signatures to keep file small/clean)
+        const exportData = allReports.map(report => {
+            const row = { ...report };
+            // Remove massive signature strings for the Excel file
+            delete row.customer_signature;
+            delete row.technician_signature;
+            return row;
+        });
+
+        // 2. Create Worksheet
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+
+        // 3. Create Workbook
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Service Reports");
+
+        // 4. Generate File Name with Date
+        const date = new Date().toISOString().split('T')[0];
+        const fileName = `Debug_Service_Reports_${date}.xlsx`;
+
+        // 5. Download
+        XLSX.writeFile(workbook, fileName);
+    }
+
+    // ==========================================
+    // 4. RENDER UI
     // ==========================================
     function renderTable(reports) {
         const tbody = document.getElementById('reportsTableBody');
@@ -209,10 +256,10 @@
                 <td><span class="status-badge ${badgeClass}">${report.job_type}</span></td>
                 <td>${report.technician_name}</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary btn-action" onclick="viewDetails(${report.id})">
+                    <button class="btn btn-sm btn-outline-primary btn-action" onclick="viewDetails(${report.id})" title="View Details">
                         <i class="bi bi-eye"></i>
                     </button>
-                    <button class="btn btn-sm btn-outline-success btn-action" onclick="generatePDFById(${report.id})">
+                    <button class="btn btn-sm btn-outline-success btn-action" onclick="generatePDFById(${report.id})" title="Download PDF">
                         <i class="bi bi-file-earmark-pdf"></i>
                     </button>
                 </td>
@@ -235,40 +282,70 @@
     document.getElementById('searchInput').addEventListener('keyup', (e) => {
         const term = e.target.value.toLowerCase();
         const filtered = allReports.filter(r => 
-            r.job_number.toLowerCase().includes(term) || 
-            r.customer_name.toLowerCase().includes(term)
+            (r.job_number && r.job_number.toLowerCase().includes(term)) || 
+            (r.customer_name && r.customer_name.toLowerCase().includes(term)) ||
+            (r.technician_name && r.technician_name.toLowerCase().includes(term))
         );
         renderTable(filtered);
     });
 
     // ==========================================
-    // 4. VIEW DETAILS & PDF
+    // 5. VIEW DETAILS & PDF RE-GENERATION
     // ==========================================
     function viewDetails(id) {
         const report = allReports.find(r => r.id === id);
         if(!report) return;
 
+        // Create a nice view of ALL data
         const content = `
             <div class="row">
                 <div class="col-md-6">
                     <h6>Job Info</h6>
-                    <p>Job: ${report.job_number} (${report.job_type})<br>
-                    Invoice: ${report.invoice_number}</p>
+                    <p><strong>Job:</strong> ${report.job_number}<br>
+                    <strong>Type:</strong> ${report.job_type}<br>
+                    <strong>Invoice:</strong> ${report.invoice_number}<br>
+                    <strong>Date:</strong> ${report.report_date}</p>
                 </div>
                 <div class="col-md-6">
                     <h6>Customer</h6>
-                    <p>${report.customer_name}<br>
-                    ${report.customer_address}</p>
+                    <p><strong>Name:</strong> ${report.customer_name}<br>
+                    <strong>Contact:</strong> ${report.contact_person} (${report.contact_number})<br>
+                    <strong>Address:</strong> ${report.customer_address}</p>
+                </div>
+            </div>
+            <hr>
+            <div class="row">
+                <div class="col-md-6">
+                     <h6>UPS Details</h6>
+                     <p><strong>UPS:</strong> ${report.ups_brand} ${report.ups_model}<br>
+                     <strong>Serial:</strong> ${report.ups_serial}<br>
+                     <strong>Rating:</strong> ${report.ups_kva} KVA / ${report.ups_kw} KW</p>
+                </div>
+                <div class="col-md-6">
+                     <h6>Battery Details</h6>
+                     <p><strong>Make:</strong> ${report.battery_make_ah}<br>
+                     <strong>Type/Qty:</strong> ${report.battery_type_qty}<br>
+                     <strong>Date Set:</strong> ${report.battery_date_set}</p>
                 </div>
             </div>
             <hr>
             <h6>Technical Readings</h6>
             <table class="table table-sm table-bordered">
-                <tr><td>Input L-N</td><td>${report.input_voltage_ln || '-'} V</td><td>Output L-N</td><td>${report.output_voltage_ln || '-'} V</td></tr>
-                <tr><td>Load %</td><td>${report.load_percentage || '-'} %</td><td>Charging</td><td>${report.charging_current || '-'} A</td></tr>
+                <thead><tr class="table-light"><th>Param</th><th>Input</th><th>Output</th><th>Other</th></tr></thead>
+                <tr><td>L-N</td><td>${report.input_voltage_ln || '-'} V</td><td>${report.output_voltage_ln || '-'} V</td><td>Load: ${report.load_percentage || '-'}%</td></tr>
+                <tr><td>L-E</td><td>${report.input_voltage_le || '-'} V</td><td>${report.output_voltage_le || '-'} V</td><td>Amp: ${report.load_amperage || '-'}A</td></tr>
+                <tr><td>N-E</td><td>${report.input_voltage_ne || '-'} V</td><td>${report.output_voltage_ne || '-'} V</td><td>Chg: ${report.charging_current || '-'}A</td></tr>
             </table>
-            <h6>Fault Reported</h6>
-            <p class="bg-light p-2 rounded">${report.fault_reported}</p>
+            
+            <h6>Logistics & Checks</h6>
+            <p><strong>Checks:</strong> VIP: ${report.check_vip}, SMD: ${report.check_smd}, UT: ${report.check_ut}<br>
+            <strong>Equipment:</strong> ${report.test_equip_model} (SN: ${report.test_equip_serial})<br>
+            <strong>Logistics:</strong> Driver: ${report.driver_name}, Vehicle: ${report.vehicle_number}, Time: ${report.time_in} - ${report.time_out}</p>
+
+            <h6>Remarks</h6>
+            <p><strong>Fault:</strong> ${report.fault_reported}</p>
+            <p><strong>Tech Remarks:</strong> ${report.tech_remarks}</p>
+            <p><strong>Cust Remarks:</strong> ${report.customer_remarks}</p>
         `;
 
         document.getElementById('modalContent').innerHTML = content;
@@ -281,12 +358,11 @@
         modal.show();
     }
 
-    // Map Database (snake_case) to PDF Generator (camelCase)
     function generatePDFById(id) {
         const dbData = allReports.find(r => r.id === id);
         if(!dbData) return;
 
-        // Convert DB structure to the structure downloadPDF expects
+        // Map DB snake_case to PDF camelCase
         const data = {
             jobNumber: dbData.job_number,
             jobType: dbData.job_type,
@@ -335,12 +411,11 @@
         generatePDF(data);
     }
 
-    // Re-use the exact PDF logic from the main file
+    // PDF GENERATION LOGIC (Same as main file)
     function generatePDF(data) {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         
-        // Helper for checks
         const checks = [];
         if(data.checkVIP) checks.push("VIP");
         if(data.checkSMD) checks.push("SMD");
@@ -352,7 +427,6 @@
         const lineHeight = 7;
         let y = 20;
 
-        // TITLE
         doc.setFontSize(18);
         doc.setTextColor(46, 125, 50);
         doc.text('Debug Computer Peripherals', 105, y, { align: 'center' });
@@ -385,7 +459,7 @@
         doc.text(`Contact: ${data.contactPerson} (${data.contactNumber})`, rightCol, y);
         y += lineHeight;
         
-        const addressLines = doc.splitTextToSize(`Address: ${data.customerAddress}`, 180);
+        const addressLines = doc.splitTextToSize(`Address: ${data.customerAddress || ''}`, 180);
         doc.text(addressLines, leftCol, y);
         y += (addressLines.length * lineHeight) + 3;
 
