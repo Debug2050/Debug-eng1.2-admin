@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Debug Computer Peripherals</title>
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.0/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        * { font-family: 'Poppins', sans-serif; }
+        body { background-color: #f8f9fa; min-height: 100vh; }
+        
+        .sidebar {
+            background: linear-gradient(135deg, #2E7D32, #4CAF50);
+            color: white;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .main-content { padding: 30px; }
+        
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }
+        
+        .table th {
+            font-weight: 600;
+            color: #2E7D32;
+            background-color: #E8F5E8;
+        }
+        
+        .status-badge {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        
+        .badge-breakdown { background-color: #ffebee; color: #c62828; }
+        .badge-service { background-color: #e3f2fd; color: #1565c0; }
+        .badge-maintenance { background-color: #e8f5e9; color: #2e7d32; }
+        
+        .btn-action {
+            padding: 5px 10px;
+            border-radius: 8px;
+            margin-right: 5px;
+        }
+
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.8);
+            display: flex; justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loader" class="loading-overlay">
+    <div class="spinner-border text-success" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+</div>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-2 sidebar d-none d-md-block">
+            <h4 class="mb-4"><i class="bi bi-tools"></i> Debug Admin</h4>
+            <div class="nav flex-column">
+                <a href="#" class="nav-link text-white active mb-2"><i class="bi bi-table"></i> All Reports</a>
+                <a href="index.html" class="nav-link text-white-50"><i class="bi bi-plus-circle"></i> New Report</a>
+            </div>
+        </div>
+
+        <div class="col-md-10 main-content">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Service Reports Database</h2>
+                <div class="d-flex gap-2">
+                    <input type="text" id="searchInput" class="form-control" placeholder="Search Job # or Customer...">
+                    <button class="btn btn-success" onclick="fetchReports()"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card p-3">
+                        <h6 class="text-muted">Total Reports</h6>
+                        <h3 id="totalCount">0</h3>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3">
+                        <h6 class="text-muted">Last 7 Days</h6>
+                        <h3 id="recentCount">0</h3>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Job #</th>
+                                    <th>Customer</th>
+                                    <th>Job Type</th>
+                                    <th>Technician</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reportsTableBody">
+                                </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title">Report Details</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="modalContent">
+                </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="modalPrintBtn">Download PDF</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    // ==========================================
+    // 1. CONFIGURATION
+    // ==========================================
+    const supabaseUrl = 'YOUR_SUPABASE_URL_HERE';
+    const supabaseKey = 'YOUR_SUPABASE_ANON_KEY_HERE';
+    const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
+
+    let allReports = [];
+
+    // ==========================================
+    // 2. FETCH DATA
+    // ==========================================
+    async function fetchReports() {
+        document.getElementById('loader').style.display = 'flex';
+        
+        try {
+            const { data, error } = await supabaseClient
+                .from('service_reports')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+
+            allReports = data;
+            renderTable(allReports);
+            updateStats(allReports);
+        } catch (err) {
+            console.error('Error:', err);
+            alert('Error loading reports. Check console/keys.');
+        } finally {
+            document.getElementById('loader').style.display = 'none';
+        }
+    }
+
+    // ==========================================
+    // 3. RENDER UI
+    // ==========================================
+    function renderTable(reports) {
+        const tbody = document.getElementById('reportsTableBody');
+        tbody.innerHTML = '';
+
+        if (reports.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center p-4">No reports found</td></tr>';
+            return;
+        }
+
+        reports.forEach(report => {
+            const row = document.createElement('tr');
+            
+            // Determine badge color
+            let badgeClass = 'badge-maintenance';
+            if(report.job_type === 'Break Down') badgeClass = 'badge-breakdown';
+            if(report.job_type === 'Service') badgeClass = 'badge-service';
+
+            row.innerHTML = `
+                <td>${report.report_date}</td>
+                <td class="fw-bold">${report.job_number}</td>
+                <td>${report.customer_name}<br><small class="text-muted">${report.contact_person}</small></td>
+                <td><span class="status-badge ${badgeClass}">${report.job_type}</span></td>
+                <td>${report.technician_name}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary btn-action" onclick="viewDetails(${report.id})">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-success btn-action" onclick="generatePDFById(${report.id})">
+                        <i class="bi bi-file-earmark-pdf"></i>
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    function updateStats(reports) {
+        document.getElementById('totalCount').textContent = reports.length;
+        
+        // Count last 7 days
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const recent = reports.filter(r => new Date(r.report_date) >= sevenDaysAgo).length;
+        document.getElementById('recentCount').textContent = recent;
+    }
+
+    // Search Filter
+    document.getElementById('searchInput').addEventListener('keyup', (e) => {
+        const term = e.target.value.toLowerCase();
+        const filtered = allReports.filter(r => 
+            r.job_number.toLowerCase().includes(term) || 
+            r.customer_name.toLowerCase().includes(term)
+        );
+        renderTable(filtered);
+    });
+
+    // ==========================================
+    // 4. VIEW DETAILS & PDF
+    // ==========================================
+    function viewDetails(id) {
+        const report = allReports.find(r => r.id === id);
+        if(!report) return;
+
+        const content = `
+            <div class="row">
+                <div class="col-md-6">
+                    <h6>Job Info</h6>
+                    <p>Job: ${report.job_number} (${report.job_type})<br>
+                    Invoice: ${report.invoice_number}</p>
+                </div>
+                <div class="col-md-6">
+                    <h6>Customer</h6>
+                    <p>${report.customer_name}<br>
+                    ${report.customer_address}</p>
+                </div>
+            </div>
+            <hr>
+            <h6>Technical Readings</h6>
+            <table class="table table-sm table-bordered">
+                <tr><td>Input L-N</td><td>${report.input_voltage_ln || '-'} V</td><td>Output L-N</td><td>${report.output_voltage_ln || '-'} V</td></tr>
+                <tr><td>Load %</td><td>${report.load_percentage || '-'} %</td><td>Charging</td><td>${report.charging_current || '-'} A</td></tr>
+            </table>
+            <h6>Fault Reported</h6>
+            <p class="bg-light p-2 rounded">${report.fault_reported}</p>
+        `;
+
+        document.getElementById('modalContent').innerHTML = content;
+        
+        // Setup the print button in modal
+        const btn = document.getElementById('modalPrintBtn');
+        btn.onclick = () => generatePDFById(id);
+        
+        const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+        modal.show();
+    }
+
+    // Map Database (snake_case) to PDF Generator (camelCase)
+    function generatePDFById(id) {
+        const dbData = allReports.find(r => r.id === id);
+        if(!dbData) return;
+
+        // Convert DB structure to the structure downloadPDF expects
+        const data = {
+            jobNumber: dbData.job_number,
+            jobType: dbData.job_type,
+            invoiceNumber: dbData.invoice_number,
+            customerName: dbData.customer_name,
+            contactPerson: dbData.contact_person,
+            customerAddress: dbData.customer_address,
+            contactNumber: dbData.contact_number,
+            reportDate: dbData.report_date,
+            upsBrand: dbData.ups_brand,
+            upsModel: dbData.ups_model,
+            upsSerial: dbData.ups_serial,
+            upsKVA: dbData.ups_kva,
+            upsKW: dbData.ups_kw,
+            batteryMakeAH: dbData.battery_make_ah,
+            batteryTypeQty: dbData.battery_type_qty,
+            batteryDateSet: dbData.battery_date_set,
+            referenceNumber: dbData.reference_number,
+            faultReported: dbData.fault_reported,
+            inputVoltageLN: dbData.input_voltage_ln,
+            inputVoltageLE: dbData.input_voltage_le,
+            inputVoltageNE: dbData.input_voltage_ne,
+            outputVoltageLN: dbData.output_voltage_ln,
+            outputVoltageLE: dbData.output_voltage_le,
+            outputVoltageNE: dbData.output_voltage_ne,
+            loadPercentage: dbData.load_percentage,
+            loadAmperage: dbData.load_amperage,
+            chargingCurrent: dbData.charging_current,
+            checkVIP: dbData.check_vip,
+            checkSMD: dbData.check_smd,
+            checkUT: dbData.check_ut,
+            testingConditions: dbData.testing_conditions,
+            testEquipmentModel: dbData.test_equip_model,
+            testEquipmentSerial: dbData.test_equip_serial,
+            techRemarks: dbData.tech_remarks,
+            technicianName: dbData.technician_name,
+            driverName: dbData.driver_name,
+            vehicleNumber: dbData.vehicle_number,
+            timeIn: dbData.time_in,
+            timeOut: dbData.time_out,
+            customerRemarks: dbData.customer_remarks,
+            customerSignature: dbData.customer_signature,
+            technicianSignature: dbData.technician_signature
+        };
+
+        generatePDF(data);
+    }
+
+    // Re-use the exact PDF logic from the main file
+    function generatePDF(data) {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        
+        // Helper for checks
+        const checks = [];
+        if(data.checkVIP) checks.push("VIP");
+        if(data.checkSMD) checks.push("SMD");
+        if(data.checkUT) checks.push("UT");
+        const checkString = checks.length > 0 ? checks.join(", ") : "None";
+
+        const leftCol = 15;
+        const rightCol = 110;
+        const lineHeight = 7;
+        let y = 20;
+
+        // TITLE
+        doc.setFontSize(18);
+        doc.setTextColor(46, 125, 50);
+        doc.text('Debug Computer Peripherals', 105, y, { align: 'center' });
+        y += 8;
+        doc.setFontSize(12);
+        doc.setTextColor(100);
+        doc.text('Service Report', 105, y, { align: 'center' });
+        y += 12;
+
+        doc.setDrawColor(46, 125, 50);
+        doc.setLineWidth(0.5);
+        doc.line(15, y, 195, y);
+        y += 10;
+
+        doc.setFontSize(10);
+        doc.setTextColor(0);
+
+        doc.setFont(undefined, 'bold');
+        doc.text("Job & Customer Details", leftCol, y);
+        doc.setFont(undefined, 'normal');
+        y += lineHeight;
+
+        doc.text(`Job No: ${data.jobNumber}`, leftCol, y);
+        doc.text(`Date: ${data.reportDate}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Job Type: ${data.jobType}`, leftCol, y);
+        doc.text(`Invoice: ${data.invoiceNumber}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Customer: ${data.customerName}`, leftCol, y);
+        doc.text(`Contact: ${data.contactPerson} (${data.contactNumber})`, rightCol, y);
+        y += lineHeight;
+        
+        const addressLines = doc.splitTextToSize(`Address: ${data.customerAddress}`, 180);
+        doc.text(addressLines, leftCol, y);
+        y += (addressLines.length * lineHeight) + 3;
+
+        doc.setFont(undefined, 'bold');
+        doc.text("Equipment (UPS & Battery)", leftCol, y);
+        doc.setFont(undefined, 'normal');
+        y += lineHeight;
+
+        doc.text(`UPS: ${data.upsBrand} ${data.upsModel || ''}`, leftCol, y);
+        doc.text(`Serial: ${data.upsSerial || '-'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Rating: ${data.upsKVA || '-'} KVA / ${data.upsKW || '-'} kW`, leftCol, y);
+        doc.text(`Ref/Prep No: ${data.referenceNumber || '-'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Battery: ${data.batteryMakeAH || '-'}`, leftCol, y);
+        doc.text(`Type/Qty: ${data.batteryTypeQty || '-'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Batt Date Set: ${data.batteryDateSet || '-'}`, leftCol, y);
+        y += lineHeight + 3;
+
+        doc.setFont(undefined, 'bold');
+        doc.text("Technical Readings", leftCol, y);
+        doc.setFont(undefined, 'normal');
+        y += lineHeight;
+
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        doc.text("Parameter", leftCol, y);
+        doc.text("Input", leftCol + 40, y);
+        doc.text("Output", leftCol + 80, y);
+        doc.text("Others", leftCol + 120, y);
+        y += 5;
+        doc.setTextColor(0);
+        doc.setFontSize(10);
+
+        doc.text("L-N Voltage:", leftCol, y);
+        doc.text(`${data.inputVoltageLN || '-'} V`, leftCol + 40, y);
+        doc.text(`${data.outputVoltageLN || '-'} V`, leftCol + 80, y);
+        doc.text(`Load: ${data.loadPercentage || '-'} %`, leftCol + 120, y);
+        y += 6;
+
+        doc.text("L-E Voltage:", leftCol, y);
+        doc.text(`${data.inputVoltageLE || '-'} V`, leftCol + 40, y);
+        doc.text(`${data.outputVoltageLE || '-'} V`, leftCol + 80, y);
+        doc.text(`Amps: ${data.loadAmperage || '-'} A`, leftCol + 120, y);
+        y += 6;
+
+        doc.text("N-E Voltage:", leftCol, y);
+        doc.text(`${data.inputVoltageNE || '-'} V`, leftCol + 40, y);
+        doc.text(`${data.outputVoltageNE || '-'} V`, leftCol + 80, y);
+        doc.text(`Chg Curr: ${data.chargingCurrent || '-'} A`, leftCol + 120, y);
+        y += lineHeight + 3;
+
+        doc.setFont(undefined, 'bold');
+        doc.text("Checks, Logistics & Remarks", leftCol, y);
+        doc.setFont(undefined, 'normal');
+        y += lineHeight;
+
+        doc.text(`Checks: ${checkString}`, leftCol, y);
+        doc.text(`Condition: ${data.testingConditions || '-'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Test Equip: ${data.testEquipmentModel || '-'}`, leftCol, y);
+        doc.text(`Serial: ${data.testEquipmentSerial || '-'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Technician: ${data.technicianName}`, leftCol, y);
+        doc.text(`Time: ${data.timeIn || '--:--'} to ${data.timeOut || '--:--'}`, rightCol, y);
+        y += lineHeight;
+        doc.text(`Driver: ${data.driverName || '-'}`, leftCol, y);
+        doc.text(`Vehicle: ${data.vehicleNumber || '-'}`, rightCol, y);
+        y += lineHeight + 5;
+
+        const faultLines = doc.splitTextToSize(`Fault Reported: ${data.faultReported}`, 180);
+        doc.text(faultLines, leftCol, y);
+        y += (faultLines.length * 5) + 3;
+
+        if (data.techRemarks) {
+            const techLines = doc.splitTextToSize(`Tech Remarks: ${data.techRemarks}`, 180);
+            doc.text(techLines, leftCol, y);
+            y += (techLines.length * 5) + 3;
+        }
+
+        if (data.customerRemarks) {
+            const custLines = doc.splitTextToSize(`Customer Remarks: ${data.customerRemarks}`, 180);
+            doc.text(custLines, leftCol, y);
+            y += (custLines.length * 5) + 3;
+        }
+
+        if (y > 250) {
+            doc.addPage();
+            y = 20;
+        } else {
+            y += 10;
+        }
+
+        doc.setFontSize(8);
+        doc.setTextColor(100);
+        
+        if(data.customerSignature) {
+            doc.text("Customer Signature", leftCol, y);
+            doc.addImage(data.customerSignature, 'PNG', leftCol, y + 2, 50, 25);
+        }
+        
+        if(data.technicianSignature) {
+            doc.text("Technician Signature", rightCol, y);
+            doc.addImage(data.technicianSignature, 'PNG', rightCol, y + 2, 50, 25);
+        }
+
+        doc.save(`Service_Report_${data.jobNumber}.pdf`);
+    }
+
+    // Init load
+    window.addEventListener('load', fetchReports);
+</script>
+
+</body>
+</html>
